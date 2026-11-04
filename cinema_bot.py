@@ -57,15 +57,15 @@ def log(*a):
     print(dt.datetime.now(CAIRO).strftime("[%H:%M:%S]"), *a, flush=True)
 
 
-def norm(v) -> str:
+def norm(v):
     return re.sub(r"\s+", " ", str(v)).strip()
 
 
-def nkey(k: str) -> str:
+def nkey(k):
     return k.lower().replace("_", "").replace("-", "")
 
 
-def to_hhmm(raw: str, fallback_date: str):
+def to_hhmm(raw, fallback_date):
     m = ISO_DT.search(raw)
     if m:
         return m.group(1), m.group(2)
@@ -184,7 +184,7 @@ def get(url):
             r = S.get(url, timeout=25)
             if r.status_code == 200:
                 return r.text
-            log(f"HTTP {r.status_code} -> {url}")
+            log("HTTP", r.status_code, "->", url)
         except Exception as e:
             log("fetch error:", e)
         time.sleep(2 + attempt * 3 + random.random())
@@ -204,9 +204,9 @@ def scan_day(date_str):
             walk_json(blob, {}, records, date_str)
         if not records:
             records = parse_html_fallback(markup, date_str)
-        if DEBUG:
-            log(f"DEBUG {url} -> {len(records)} records; sample:",
-                json.dumps(records[:3], ensure_ascii=False))
+        log(f"scan {url} -> {len(records)} records")
+        if DEBUG and records:
+            log("sample:", json.dumps(records[:3], ensure_ascii=False))
         if records:
             return records
     return []
@@ -271,8 +271,66 @@ def format_message(rows):
     by_movie = {}
     for r in rows:
         by_movie.setdefault(r["movie"], []).append(r)
-    parts = [f"🎬 <b>نزلت {len(rows)} حفلة جديدة في VOX مصر</b>"]
+    parts = ["🎬 <b>نزلت " + str(len(rows)) + " حفلة جديدة في VOX مصر</b>"]
     for movie, items in by_movie.items():
-        parts.append(f"\n<b>{movie}</b>")
+        parts.append("\n<b>" + movie + "</b>")
         for r in sorted(items, key=lambda x: (x["date"], x["time"]))[:12]:
-            exp = f" · {r['experience']}" if r["experience"] else ""
+            exp = " · " + r["experience"] if r["experience"] else ""
+            parts.append("• " + r["date"] + " — " + r["time"] + " — " + r["cinema"] + exp)
+        if len(items) > 12:
+            parts.append("• … و" + str(len(items) - 12) + " حفلة كمان")
+    parts.append("\n🔗 " + BASE + "/showtimes")
+    return "\n".join(parts)
+
+
+def one_pass():
+    state = load_state()
+    rows = collect()
+    if not rows:
+        log("no showtimes parsed this pass")
+        if not state.get("warned"):
+            state["warned"] = True
+            save_state(state)
+            tg("⚠️ البوت شغال بس مقدرش يقرا مواعيد من موقع VOX. محتاج تظبيط.")
+        return
+    new = [r for r in rows if r["key"] not in state["seen"]]
+    now = dt.datetime.now(CAIRO).isoformat(timespec="seconds")
+    for r in rows:
+        state["seen"].setdefault(r["key"], now)
+
+    if not state.get("bootstrapped"):
+        state["bootstrapped"] = True
+        save_state(state)
+        tg("✅ البوت اشتغل. اتسجّل " + str(len(rows)) + " موعد حالي كخط أساس.\n"
+           "من دلوقتي هيجيلك إشعار بأي حفلة جديدة تنزل.")
+        return
+
+    save_state(state)
+    if new:
+        log(str(len(new)) + " new showtimes")
+        tg(format_message(new[:MAX_NOTIFY]))
+    else:
+        log("no change (" + str(len(rows)) + " showtimes tracked)")
+
+
+def main():
+    if "--chatid" in sys.argv:
+        r = S.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates", timeout=20)
+        print(r.text)
+        return
+    if RUN_SECONDS == 0:
+        one_pass()
+        return
+    deadline = None if RUN_SECONDS < 0 else time.time() + RUN_SECONDS
+    while True:
+        try:
+            one_pass()
+        except Exception as e:
+            log("pass failed:", repr(e))
+        if deadline is not None and time.time() + INTERVAL > deadline:
+            return
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
