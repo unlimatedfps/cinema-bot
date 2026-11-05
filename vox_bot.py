@@ -23,7 +23,6 @@ from fmt import CAIRO, log, word_date, any_date, tg
 BASE = "https://egy.voxcinemas.com"
 CINEMA = os.getenv("CINEMA", "city-centre-almaza")
 CINEMA_LABEL = os.getenv("CINEMA_LABEL", "VOX الماظة")
-DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "7"))
 INTERVAL = int(os.getenv("INTERVAL_SECONDS", "120"))
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "-1"))
 STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "vox_state.json"))
@@ -31,7 +30,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
 TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "12"))
-MAX_HORIZON = int(os.getenv("MAX_HORIZON_DAYS", "120"))
+MAX_HORIZON = int(os.getenv("MAX_HORIZON_DAYS", "365"))
 
 S = requests.Session()
 S.headers.update({
@@ -204,38 +203,36 @@ DAY_LINK = re.compile(r'[?&]d=(\d{8})')
 
 
 def discover_days():
-    """Ask the site which days it actually sells, instead of assuming the
-    next N are the only ones. VOX lists advance dates weeks out (mid-November
-    and late December at the time of writing); a fixed window silently misses
-    every one of them.
+    """Return {iso_date: url} for exactly the days the cinema page lists,
+    or None if the page could not be read.
 
-    Returns {iso_date: url}. Falls back to the next DAYS_AHEAD days if the
-    landing page cannot be read.
+    No invented days: if the landing page is unreachable the caller reports
+    a failed scan rather than guessing a window that may not exist.
     """
     today = dt.datetime.now(CAIRO).date()
     base_url = BASE + "/showtimes?c=" + CINEMA
-    days = {today.isoformat(): base_url}
 
     html = fetch(base_url)
-    if html:
-        for m in DAY_LINK.finditer(html):
-            raw = m.group(1)
-            try:
-                d = dt.datetime.strptime(raw, "%Y%m%d").date()
-            except ValueError:
-                continue
-            if d < today or (d - today).days > MAX_HORIZON:
-                continue
-            # Use the site's own parameter spelling, not a guessed one.
-            days[d.isoformat()] = base_url + "&d=" + raw
-    else:
-        log("landing page unreadable - falling back to a fixed window")
+    if not html:
+        log("landing page unreadable - cannot list the days")
+        return None
 
-    if len(days) == 1:
-        for i in range(1, DAYS_AHEAD):
-            d = today + dt.timedelta(days=i)
-            days[d.isoformat()] = base_url + "&d=" + d.strftime("%Y%m%d")
-
+    # The landing page itself is the cinema page for today.
+    days = {today.isoformat(): base_url}
+    skipped = 0
+    for m in DAY_LINK.finditer(html):
+        raw = m.group(1)
+        try:
+            d = dt.datetime.strptime(raw, "%Y%m%d").date()
+        except ValueError:
+            continue
+        if d < today or (d - today).days > MAX_HORIZON:
+            skipped += 1
+            continue
+        # Use the site's own parameter spelling, not a guessed one.
+        days[d.isoformat()] = base_url + "&d=" + raw
+    if skipped:
+        log("ignored", skipped, "out-of-range day links")
     return days
 
 
@@ -244,7 +241,9 @@ def collect():
     never silently treated as 'this day has no showtimes'."""
     seen, out, failed = set(), [], []
     days = discover_days()
-    log("days available:", len(days))
+    if days is None:
+        return [], ["<landing page>"]
+    log("days on the cinema page:", len(days))
     for day, url in sorted(days.items()):
         html = fetch(url)
         if not html:
