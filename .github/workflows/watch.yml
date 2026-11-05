@@ -29,10 +29,12 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CINEMA: "city-centre-almaza"
+          STATE_FILE: "state.json"
           RUN_SECONDS: "250"
           INTERVAL_SECONDS: "120"
           DAYS_AHEAD: "7"
-        run: python cinema_bot.py
+        run: python vox_bot.py
 
       - name: Commit state
         run: |

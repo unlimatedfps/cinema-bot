@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""VOX Egypt (City Centre Almaza) -> Telegram. Runs on your phone via Termux."""
+"""VOX Egypt (City Centre Almaza) -> Telegram.
 
+Runs in two modes from the same file:
+  RUN_SECONDS=-1  (default)  infinite loop, sends a startup ping  -> Termux
+  RUN_SECONDS=250            bounded loop, no startup ping        -> GitHub Actions
+  RUN_SECONDS=0              one pass and exit                    -> manual test
+"""
 import datetime as dt
 import json
 import os
@@ -20,9 +25,11 @@ except Exception:
 
 BASE = "https://egy.voxcinemas.com"
 CINEMA = os.getenv("CINEMA", "city-centre-almaza")
+CINEMA_LABEL = os.getenv("CINEMA_LABEL", "VOX الماظة")
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "7"))
 INTERVAL = int(os.getenv("INTERVAL_SECONDS", "120"))
-STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "vox_state.json"))
+RUN_SECONDS = int(os.getenv("RUN_SECONDS", "-1"))
+STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "state.json"))
 TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "40"))
@@ -37,13 +44,28 @@ S.headers.update({
 
 TIME_TXT = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\s*(AM|PM|am|pm)?")
 ISO_DT = re.compile(r"(\d{4}-\d{2}-\d{2})[T ]([0-2]\d:[0-5]\d)")
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+COMPACT_DATE = re.compile(r"\b(20\d{2})(\d{2})(\d{2})\b")
+
 MOVIE_KEYS = {"moviename", "movietitle", "filmtitle", "filmname", "eventname"}
-CINEMA_KEYS = {"cinemaname", "locationname", "venuename", "sitename", "theatrename"}
 EXP_KEYS = {"experience", "format", "screentype", "sessionattribute", "attribute"}
 TIME_KEYS = {"time", "starttime", "showtime", "sessiontime", "start", "showdatetime",
              "datetime", "showtimedate", "sessiondatetime", "startsat"}
+DATE_KEYS = {"date", "showdate", "sessiondate", "day", "displaydate", "datelabel",
+             "dateheading", "daylabel", "businessdate"}
+
+# Words the site prints instead of a real date.
+WORD_DAYS = {
+    "today": 0, "tonight": 0, "اليوم": 0, "النهاردة": 0, "النهارده": 0,
+    "tomorrow": 1, "بكرة": 1, "بكره": 1, "غدا": 1, "غداً": 1,
+}
+
 TOKEN_RE = re.compile(r"/movies/([a-z0-9\-]{3,})"
                       r"|>\s*((?:[01]?\d|2[0-3]):[0-5]\d\s*(?:AM|PM|am|pm)?)\s*<")
+
+WORD_IN_HTML = re.compile(
+    r">\s*([^<>]{0,30}?(?:Today|Tonight|Tomorrow|اليوم|النهاردة|بكرة)[^<>]{0,30}?)\s*<",
+    re.I)
 
 
 def log(*a):
@@ -54,10 +76,37 @@ def nkey(k):
     return k.lower().replace("_", "").replace("-", "")
 
 
-def to_hhmm(raw, fallback):
+def word_date(raw):
+    """'Today' / 'اليوم' / 'Tomorrow' -> a real yyyy-mm-dd in Cairo time.
+
+    Resolved at call time, not at startup, so a bot left running overnight
+    still gives the right answer after midnight.
+    """
+    s = raw.lower()
+    for w, delta in WORD_DAYS.items():
+        if w in s:
+            return (dt.datetime.now(CAIRO).date() + dt.timedelta(days=delta)).isoformat()
+    return None
+
+
+def any_date(raw):
+    """Pull a date out of a string in any of the shapes the site uses."""
+    m = ISO_DATE.search(raw)
+    if m:
+        return m.group(0)
+    m = COMPACT_DATE.search(raw)
+    if m:
+        return "%s-%s-%s" % (m.group(1), m.group(2), m.group(3))
+    return word_date(raw)
+
+
+def to_hhmm(raw):
+    """Return (date_or_None, 'HH:MM'). None date means the string carried only
+    a time, and the caller decides which date it belongs to."""
     m = ISO_DT.search(raw)
     if m:
         return m.group(1), m.group(2)
+    wd = any_date(raw)
     m = TIME_TXT.search(raw)
     if not m:
         return None, None
@@ -66,7 +115,7 @@ def to_hhmm(raw, fallback):
         h += 12
     if ap == "AM" and h == 12:
         h = 0
-    return fallback, "%02d:%s" % (h, mi)
+    return wd, "%02d:%s" % (h, mi)
 
 
 def json_blobs(html):
@@ -100,15 +149,14 @@ def walk(node, ctx, out, page_date):
                 continue
             if lk in MOVIE_KEYS:
                 local["movie"] = sv
-            elif lk in CINEMA_KEYS:
-                local["cinema"] = sv
             elif lk in EXP_KEYS and len(sv) < 40:
                 local["experience"] = sv
-            elif lk in ("title", "name", "slug"):
-                if hint == "movie":
-                    local.setdefault("movie", sv)
-                elif hint == "cinema":
-                    local.setdefault("cinema", sv)
+            elif lk in DATE_KEYS:
+                d = any_date(sv)
+                if d:
+                    local["date"] = d
+            elif lk in ("title", "name", "slug") and hint == "movie":
+                local.setdefault("movie", sv)
         raw_time = None
         for k, v in node.items():
             if isinstance(v, str) and nkey(k) in TIME_KEYS:
@@ -116,11 +164,11 @@ def walk(node, ctx, out, page_date):
                     raw_time = v
                     break
         if raw_time:
-            d, hhmm = to_hhmm(raw_time, page_date)
+            d, hhmm = to_hhmm(raw_time)
             if hhmm:
-                out.append({"date": d or page_date, "time": hhmm,
+                out.append({"date": d or local.get("date") or page_date,
+                            "time": hhmm,
                             "movie": local.get("movie", "?"),
-                            "cinema": local.get("cinema", CINEMA),
                             "experience": local.get("experience", "")})
         for k, v in node.items():
             if isinstance(v, (dict, list)):
@@ -128,8 +176,6 @@ def walk(node, ctx, out, page_date):
                 lk = nkey(k)
                 if lk.startswith("movie") or lk.startswith("film"):
                     child["_hint"] = "movie"
-                elif lk.startswith("cinema") or lk.startswith("venue"):
-                    child["_hint"] = "cinema"
                 walk(v, child, out, page_date)
     elif isinstance(node, list):
         for it in node:
@@ -137,20 +183,41 @@ def walk(node, ctx, out, page_date):
 
 
 def html_fallback(html, page_date):
-    out, movie = [], "?"
+    """Plain-HTML pass used when no JSON blob yielded anything.
+
+    Tracks word-dates ('Today') as section headings so the times printed
+    under one are stamped with the right day.
+    """
+    events = []
     for m in TOKEN_RE.finditer(html):
         if m.group(1):
-            movie = m.group(1).replace("-", " ").title()
+            events.append((m.start(), "movie", m.group(1)))
         elif m.group(2):
-            d, hhmm = to_hhmm(m.group(2), page_date)
-            if hhmm and movie != "?":
-                out.append({"date": d or page_date, "time": hhmm, "movie": movie,
-                            "cinema": CINEMA, "experience": ""})
+            events.append((m.start(), "time", m.group(2)))
+    for m in WORD_IN_HTML.finditer(html):
+        d = word_date(m.group(1))
+        if d:
+            events.append((m.start(), "date", d))
+    for m in ISO_DATE.finditer(html):
+        events.append((m.start(), "date", m.group(0)))
+    events.sort(key=lambda x: x[0])
+
+    out, movie, cur_date = [], "?", None
+    for _, kind, val in events:
+        if kind == "movie":
+            movie = val.replace("-", " ").title()
+        elif kind == "date":
+            cur_date = val
+        elif kind == "time" and movie != "?":
+            d, hhmm = to_hhmm(val)
+            if hhmm:
+                out.append({"date": d or cur_date or page_date, "time": hhmm,
+                            "movie": movie, "experience": ""})
     return out
 
 
 def fetch(url):
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             r = S.get(url, timeout=30)
             if r.status_code == 200:
@@ -158,17 +225,20 @@ def fetch(url):
             log("HTTP", r.status_code, url)
         except Exception as e:
             log("fetch error:", type(e).__name__)
-        time.sleep(3 + attempt * 3 + random.random())
+        time.sleep(2 + attempt * 3 + random.random())
     return None
 
 
 def collect():
+    """Return (rows, failed_days). A day that could not be fetched is reported,
+    never silently treated as 'this day has no showtimes'."""
     today = dt.datetime.now(CAIRO).date()
-    seen, out = set(), []
+    seen, out, failed = set(), [], []
     for i in range(DAYS_AHEAD):
         d = (today + dt.timedelta(days=i)).isoformat()
         html = fetch(BASE + "/showtimes?c=" + CINEMA + "&d=" + d)
         if not html:
+            failed.append(d)
             continue
         rows = []
         for blob in json_blobs(html):
@@ -177,14 +247,16 @@ def collect():
             rows = html_fallback(html, d)
         log("day", d, "->", len(rows), "showtimes")
         for r in rows:
-            key = "|".join([r["date"], r["cinema"], r["movie"], r["time"], r["experience"]])
+            # Cinema is pinned to one constant so the key never drifts when the
+            # site spells the venue differently between responses.
+            key = "|".join([r["date"], CINEMA, r["movie"], r["time"], r["experience"]])
             if key in seen:
                 continue
             seen.add(key)
             r["key"] = key
             out.append(r)
         time.sleep(1.5)
-    return out
+    return out, failed
 
 
 def load_state():
@@ -203,29 +275,36 @@ def save_state(state):
 
 
 def tg(text):
+    """Send to Telegram. Returns True only if every chunk went through."""
     if not TOKEN or not CHAT_ID:
         log("!! telegram secrets missing")
-        return
+        return False
     url = "https://api.telegram.org/bot" + TOKEN + "/sendMessage"
+    ok_all = True
     for i in range(0, len(text), 3800):
         data = {"chat_id": CHAT_ID, "text": text[i:i + 3800],
                 "parse_mode": "HTML", "disable_web_page_preview": True}
+        sent = False
         for attempt in range(3):
             try:
                 r = S.post(url, data=data, timeout=20)
                 if r.ok:
+                    sent = True
                     break
                 log("telegram error:", r.status_code, r.text[:200])
             except Exception as e:
                 log("telegram exception:", type(e).__name__)
             time.sleep(3 * (attempt + 1))
+        if not sent:
+            ok_all = False
+    return ok_all
 
 
 def format_message(rows):
     by_movie = {}
     for r in rows:
         by_movie.setdefault(r["movie"], []).append(r)
-    parts = ["\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة - الماظة</b>"]
+    parts = ["\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة - " + CINEMA_LABEL + "</b>"]
     for movie, items in by_movie.items():
         parts.append("\n<b>" + movie + "</b>")
         for r in sorted(items, key=lambda x: (x["date"], x["time"]))[:12]:
@@ -239,32 +318,69 @@ def format_message(rows):
 
 def one_pass():
     state = load_state()
-    rows = collect()
+    rows, failed = collect()
+
+    if failed:
+        log("failed days:", ", ".join(failed))
+
     if not rows:
         log("nothing parsed")
+        if not state.get("warned"):
+            state["warned"] = True
+            save_state(state)
+            tg("⚠️ البوت مقدرش يقرا أي مواعيد من فوكس " + CINEMA_LABEL + ".")
         return
-    new = [r for r in rows if r["key"] not in state["seen"]]
+    state["warned"] = False
+
     now = dt.datetime.now(CAIRO).isoformat(timespec="seconds")
-    for r in rows:
-        state["seen"].setdefault(r["key"], now)
+
     if not state.get("bootstrapped"):
+        if failed:
+            # Never set the baseline from a partial scan: every day that failed
+            # would be reported as brand new on the next successful pass.
+            log("baseline skipped - incomplete scan")
+            return
+        for r in rows:
+            state["seen"].setdefault(r["key"], now)
         state["bootstrapped"] = True
         save_state(state)
-        tg("\u2705 البوت اشتغل من الموبايل. اتسجّل " + str(len(rows)) + " موعد كخط أساس.")
+        tg("✅ البوت اشتغل على " + CINEMA_LABEL + ". اتسجّل "
+           + str(len(rows)) + " موعد كخط أساس.")
         return
-    save_state(state)
+
+    new = [r for r in rows if r["key"] not in state["seen"]]
     if new:
         log(str(len(new)) + " new")
-        tg(format_message(new[:MAX_NOTIFY]))
+        # Send BEFORE recording them. If Telegram is down the state does not
+        # advance, so the same showtimes are retried on the next pass instead
+        # of being lost.
+        if not tg(format_message(new[:MAX_NOTIFY])):
+            log("telegram failed - state not advanced, will retry")
+            return
     else:
         log("no change (" + str(len(rows)) + " tracked)")
 
+    for r in rows:
+        state["seen"].setdefault(r["key"], now)
+    save_state(state)
 
-if __name__ == "__main__":
-    tg("\U0001F7E2 البوت بدأ الشغل على الموبايل.")
+
+def main():
+    if RUN_SECONDS < 0:
+        tg("\U0001F7E2 البوت بدأ الشغل على الموبايل.")
+    if RUN_SECONDS == 0:
+        one_pass()
+        return
+    deadline = None if RUN_SECONDS < 0 else time.time() + RUN_SECONDS
     while True:
         try:
             one_pass()
         except Exception as e:
             log("pass failed:", repr(e))
+        if deadline is not None and time.time() + INTERVAL > deadline:
+            return
         time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
