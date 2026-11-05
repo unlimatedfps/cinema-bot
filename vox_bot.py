@@ -23,7 +23,7 @@ from fmt import CAIRO, log, word_date, any_date, tg
 BASE = "https://egy.voxcinemas.com"
 CINEMA = os.getenv("CINEMA", "city-centre-almaza")
 CINEMA_LABEL = os.getenv("CINEMA_LABEL", "VOX الماظة")
-INTERVAL = int(os.getenv("INTERVAL_SECONDS", "120"))
+INTERVAL = int(os.getenv("INTERVAL_SECONDS", "600"))
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "-1"))
 STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "vox_state.json"))
 TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
