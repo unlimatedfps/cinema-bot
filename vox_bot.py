@@ -31,6 +31,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
 TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "12"))
+MAX_HORIZON = int(os.getenv("MAX_HORIZON_DAYS", "120"))
 
 S = requests.Session()
 S.headers.update({
@@ -199,23 +200,62 @@ def fetch(url):
     return None
 
 
+DAY_LINK = re.compile(r'[?&]d=(\d{8})')
+
+
+def discover_days():
+    """Ask the site which days it actually sells, instead of assuming the
+    next N are the only ones. VOX lists advance dates weeks out (mid-November
+    and late December at the time of writing); a fixed window silently misses
+    every one of them.
+
+    Returns {iso_date: url}. Falls back to the next DAYS_AHEAD days if the
+    landing page cannot be read.
+    """
+    today = dt.datetime.now(CAIRO).date()
+    base_url = BASE + "/showtimes?c=" + CINEMA
+    days = {today.isoformat(): base_url}
+
+    html = fetch(base_url)
+    if html:
+        for m in DAY_LINK.finditer(html):
+            raw = m.group(1)
+            try:
+                d = dt.datetime.strptime(raw, "%Y%m%d").date()
+            except ValueError:
+                continue
+            if d < today or (d - today).days > MAX_HORIZON:
+                continue
+            # Use the site's own parameter spelling, not a guessed one.
+            days[d.isoformat()] = base_url + "&d=" + raw
+    else:
+        log("landing page unreadable - falling back to a fixed window")
+
+    if len(days) == 1:
+        for i in range(1, DAYS_AHEAD):
+            d = today + dt.timedelta(days=i)
+            days[d.isoformat()] = base_url + "&d=" + d.strftime("%Y%m%d")
+
+    return days
+
+
 def collect():
     """Return (rows, failed_days). A day that could not be fetched is reported,
     never silently treated as 'this day has no showtimes'."""
-    today = dt.datetime.now(CAIRO).date()
     seen, out, failed = set(), [], []
-    for i in range(DAYS_AHEAD):
-        d = (today + dt.timedelta(days=i)).isoformat()
-        html = fetch(BASE + "/showtimes?c=" + CINEMA + "&d=" + d)
+    days = discover_days()
+    log("days available:", len(days))
+    for day, url in sorted(days.items()):
+        html = fetch(url)
         if not html:
-            failed.append(d)
+            failed.append(day)
             continue
         rows = []
         for blob in json_blobs(html):
-            walk(blob, {}, rows, d)
+            walk(blob, {}, rows, day)
         if not rows:
-            rows = html_fallback(html, d)
-        log("day", d, "->", len(rows), "showtimes")
+            rows = html_fallback(html, day)
+        log("day", day, "->", len(rows), "showtimes")
         for r in rows:
             # Cinema is pinned to one constant so the key never drifts when the
             # site spells the venue differently between responses.
