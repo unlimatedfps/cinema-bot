@@ -17,11 +17,8 @@ import time
 
 import requests
 
-try:
-    from zoneinfo import ZoneInfo
-    CAIRO = ZoneInfo("Africa/Cairo")
-except Exception:
-    CAIRO = dt.timezone(dt.timedelta(hours=2))
+import fmt
+from fmt import CAIRO, log, word_date, any_date, tg
 
 BASE = "https://egy.voxcinemas.com"
 CINEMA = os.getenv("CINEMA", "city-centre-almaza")
@@ -29,7 +26,7 @@ CINEMA_LABEL = os.getenv("CINEMA_LABEL", "VOX الماظة")
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "7"))
 INTERVAL = int(os.getenv("INTERVAL_SECONDS", "120"))
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "-1"))
-STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "state.json"))
+STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "vox_state.json"))
 TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
@@ -69,36 +66,8 @@ WORD_IN_HTML = re.compile(
     re.I)
 
 
-def log(*a):
-    print(dt.datetime.now(CAIRO).strftime("[%H:%M:%S]"), *a, flush=True)
-
-
 def nkey(k):
     return k.lower().replace("_", "").replace("-", "")
-
-
-def word_date(raw):
-    """'Today' / 'اليوم' / 'Tomorrow' -> a real yyyy-mm-dd in Cairo time.
-
-    Resolved at call time, not at startup, so a bot left running overnight
-    still gives the right answer after midnight.
-    """
-    s = raw.lower()
-    for w, delta in WORD_DAYS.items():
-        if w in s:
-            return (dt.datetime.now(CAIRO).date() + dt.timedelta(days=delta)).isoformat()
-    return None
-
-
-def any_date(raw):
-    """Pull a date out of a string in any of the shapes the site uses."""
-    m = ISO_DATE.search(raw)
-    if m:
-        return m.group(0)
-    m = COMPACT_DATE.search(raw)
-    if m:
-        return "%s-%s-%s" % (m.group(1), m.group(2), m.group(3))
-    return word_date(raw)
 
 
 def to_hhmm(raw):
@@ -275,120 +244,13 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True), "utf-8")
 
 
-def chunk_lines(text, limit=3500):
-    """Split on line boundaries, never mid-tag: a <b> cut in half makes
-    Telegram reject the whole message with HTTP 400."""
-    out, cur = [], ""
-    for line in text.split("\n"):
-        while len(line) > limit:
-            out.append(line[:limit])
-            line = line[limit:]
-        if cur and len(cur) + len(line) + 1 > limit:
-            out.append(cur)
-            cur = line
-        else:
-            cur = cur + "\n" + line if cur else line
-    if cur:
-        out.append(cur)
-    return out
-
-
-def tg(text):
-    """Send to Telegram. Returns True only if every chunk went through."""
-    if not TOKEN or not CHAT_ID:
-        log("!! telegram secrets missing")
-        return False
-    url = "https://api.telegram.org/bot" + TOKEN + "/sendMessage"
-    ok_all = True
-    for chunk in chunk_lines(text):
-        sent = False
-        for attempt in range(3):
-            try:
-                r = S.post(url, data={"chat_id": CHAT_ID, "text": chunk,
-                                      "parse_mode": "HTML",
-                                      "disable_web_page_preview": True}, timeout=20)
-                if r.ok:
-                    sent = True
-                    break
-                log("telegram error:", r.status_code, r.text[:200])
-                if r.status_code == 400:
-                    # Malformed HTML would retry forever and block the state.
-                    # Resend once as plain text so the alert still arrives.
-                    plain = re.sub(r"</?b>", "", chunk)
-                    r2 = S.post(url, data={"chat_id": CHAT_ID, "text": plain,
-                                           "disable_web_page_preview": True}, timeout=20)
-                    if r2.ok:
-                        sent = True
-                        break
-            except Exception as e:
-                log("telegram exception:", type(e).__name__)
-            time.sleep(3 * (attempt + 1))
-        if not sent:
-            ok_all = False
-    return ok_all
-
-
-AR_DAYS = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس",
-           "الجمعة", "السبت", "الأحد"]
-AR_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
-             "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
-
-
-def pretty_date(iso):
-    """2026-11-07 -> 'السبت 7 نوفمبر', with النهاردة/بكرة when it applies."""
-    try:
-        d = dt.date.fromisoformat(iso)
-    except ValueError:
-        return iso
-    label = "%s %d %s" % (AR_DAYS[d.weekday()], d.day, AR_MONTHS[d.month - 1])
-    delta = (d - dt.datetime.now(CAIRO).date()).days
-    if delta == 0:
-        return "النهاردة · " + label
-    if delta == 1:
-        return "بكرة · " + label
-    return label
-
-
-def h12(hhmm):
-    """'19:30' -> '7:30 PM'."""
-    h, mi = hhmm.split(":")
-    h = int(h)
-    return "%d:%s %s" % (h % 12 or 12, mi, "AM" if h < 12 else "PM")
-
-
-def night_key(hhmm):
-    """Sort a cinema day, not a clock day: a 00:15 show is the end of the
-    night, so anything before 06:00 sorts after the evening shows."""
-    h, mi = hhmm.split(":")
-    h = int(h)
-    return (h + 24 if h < 6 else h, int(mi))
+def tg_s(text):
+    return tg(text, S)
 
 
 def format_message(rows):
-    parts = ["\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة — "
-             + CINEMA_LABEL + "</b>"]
-    by_movie = {}
-    for r in rows:
-        by_movie.setdefault(r["movie"], []).append(r)
-    for movie in sorted(by_movie):
-        parts.append("")
-        parts.append("<b>" + movie + "</b>")
-        by_date = {}
-        for r in by_movie[movie]:
-            by_date.setdefault(r["date"], []).append(r)
-        for date in sorted(by_date):
-            parts.append("\u25B8 " + pretty_date(date))
-            by_exp = {}
-            for r in by_date[date]:
-                by_exp.setdefault(r["experience"], set()).add(r["time"])
-            for exp in sorted(by_exp):
-                times = " · ".join(h12(t) for t in sorted(by_exp[exp],
-                                                              key=night_key))
-                parts.append(("   " + exp + ": " + times) if exp
-                             else ("   " + times))
-    parts.append("")
-    parts.append("\U0001F517 " + BASE + "/showtimes?c=" + CINEMA)
-    return "\n".join(parts)
+    return fmt.format_message(rows, CINEMA_LABEL,
+                              BASE + "/showtimes?c=" + CINEMA)
 
 
 def one_pass():
@@ -403,7 +265,7 @@ def one_pass():
         if not state.get("warned"):
             state["warned"] = True
             save_state(state)
-            tg("⚠️ البوت مقدرش يقرا أي مواعيد من فوكس " + CINEMA_LABEL + ".")
+            tg_s("⚠️ البوت مقدرش يقرا أي مواعيد من فوكس " + CINEMA_LABEL + ".")
         return
     state["warned"] = False
 
@@ -419,7 +281,7 @@ def one_pass():
             state["seen"].setdefault(r["key"], now)
         state["bootstrapped"] = True
         save_state(state)
-        tg("✅ البوت اشتغل على " + CINEMA_LABEL + ". اتسجّل "
+        tg_s("✅ البوت اشتغل على " + CINEMA_LABEL + ". اتسجّل "
            + str(len(rows)) + " موعد كخط أساس.")
         return
 
@@ -430,7 +292,7 @@ def one_pass():
         # advance, so the same showtimes are retried on the next pass instead
         # of being lost.
         batch = new[:MAX_NOTIFY] if MAX_NOTIFY > 0 else new
-        if not tg(format_message(batch)):
+        if not tg(format_message(batch), S):
             log("telegram failed - state not advanced, will retry")
             return
     else:
@@ -443,7 +305,7 @@ def one_pass():
 
 def main():
     if RUN_SECONDS < 0:
-        tg("\U0001F7E2 البوت بدأ الشغل على الموبايل.")
+        tg_s("\U0001F7E2 البوت بدأ الشغل على الموبايل.")
     if RUN_SECONDS == 0:
         one_pass()
         return

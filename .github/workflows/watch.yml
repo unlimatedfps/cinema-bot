@@ -1,11 +1,8 @@
 name: cinema-watch
 
 on:
-  # Schedule disabled: GitHub runners cannot reach egy.voxcinemas.com
-  # (every request times out), so every scheduled run burned 12 minutes
-  # and died before it could save state. Manual runs still work.
-  # schedule:
-  #   - cron: "*/5 * * * *"
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -32,12 +29,10 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CINEMA: "city-centre-almaza"
           STATE_FILE: "state.json"
           RUN_SECONDS: "250"
           INTERVAL_SECONDS: "120"
-          DAYS_AHEAD: "7"
-        run: python vox_bot.py
+        run: python cinema_bot.py
 
       - name: Commit state
         run: |
