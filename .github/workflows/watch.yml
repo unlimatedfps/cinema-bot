@@ -2,7 +2,7 @@ name: cinema-watch
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -29,8 +29,9 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          STATE_FILE: "state.json"
-          RUN_SECONDS: "0"
+          RUN_SECONDS: "250"
+          INTERVAL_SECONDS: "120"
+          DAYS_AHEAD: "7"
         run: python cinema_bot.py
 
       - name: Commit state

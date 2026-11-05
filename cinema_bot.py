@@ -12,8 +12,11 @@ import time
 
 import requests
 
-import fmt
-from fmt import CAIRO, log, word_date, tg
+try:
+    from zoneinfo import ZoneInfo
+    CAIRO = ZoneInfo("Africa/Cairo")
+except Exception:
+    CAIRO = dt.timezone(dt.timedelta(hours=2))
 
 THEATERS    = [t.strip() for t in os.getenv("THEATERS", "3101353").split(",") if t.strip()]
 STATE_FILE  = pathlib.Path(os.getenv("STATE_FILE", "state.json"))
@@ -21,8 +24,7 @@ TOKEN       = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID     = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 INTERVAL    = int(os.getenv("INTERVAL_SECONDS", "120"))
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "0"))
-MAX_NOTIFY  = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
-CINEMA_LABEL = os.getenv("CINEMA_LABEL", "VOX الماظة")
+MAX_NOTIFY  = int(os.getenv("MAX_NOTIFY", "40"))
 
 S = requests.Session()
 S.headers.update({
@@ -43,9 +45,10 @@ EXP_RE = re.compile(r'>\s*(Standard|Gold|Kids|4DX|IMAX|MAX VIP|MAX|VIP|Premium|'
                     r'Platinum|Screen ?X|Dolby[^<]{0,10})\s*<', re.I)
 TIME_RE = re.compile(r'>\s*(\d{1,2}:\d{2})\s*(am|pm|midnight|noon)?\s*<', re.I)
 TITLE_RE = re.compile(r'<title>([^<]{3,150})</title>', re.I)
-WORD_DAY_RE = re.compile(
-    r'>\s*([^<>]{0,30}?(?:Today|Tonight|Tomorrow|اليوم|النهاردة|بكرة)[^<>]{0,30}?)\s*<',
-    re.I)
+
+
+def log(*a):
+    print(dt.datetime.now(CAIRO).strftime("[%H:%M:%S]"), *a, flush=True)
 
 
 def make_date(day, month_name):
@@ -96,12 +99,6 @@ def parse(html, theater):
         events.append((m.start(), 0, "movie", m.group(1), m.group(2).strip()))
     for m in DAY_RE.finditer(html):
         events.append((m.start(), 1, "day", m.group(1), m.group(2)))
-    for m in WORD_DAY_RE.finditer(html):
-        # elCinema labels the current day in words; without this every
-        # showtime under that heading is dropped for having no date.
-        d = word_date(m.group(1))
-        if d:
-            events.append((m.start(), 1, "isoday", d, ""))
     for m in EXP_RE.finditer(html):
         events.append((m.start(), 2, "exp", m.group(1).strip(), ""))
     for m in TIME_RE.finditer(html):
@@ -121,8 +118,6 @@ def parse(html, theater):
                 titles.setdefault(a, b)
         elif kind == "day":
             cur_date = make_date(a, b)
-        elif kind == "isoday":
-            cur_date = a
         elif kind == "exp":
             cur_exp = a
         elif kind == "time" and cur_movie and cur_date:
@@ -189,13 +184,19 @@ def tg(text):
             time.sleep(3 * (attempt + 1))
 
 
-def tg_s(text):
-    return tg(text, S)
-
-
 def format_message(rows):
-    return fmt.format_message(rows, CINEMA_LABEL,
-                              "https://elcinema.com/en/theater/" + THEATERS[0] + "/")
+    by_movie = {}
+    for r in rows:
+        by_movie.setdefault(r["movie"], []).append(r)
+    parts = ["\U0001F4FA <b>[elCinema] نزلت " + str(len(rows)) + " حفلة جديدة</b>"]
+    for movie, items in by_movie.items():
+        parts.append("\n<b>" + movie + "</b>")
+        for r in sorted(items, key=lambda x: (x["date"], x["time"]))[:12]:
+            exp = " · " + r["experience"] if r["experience"] else ""
+            parts.append("• " + r["date"] + " — " + r["time"] + exp)
+        if len(items) > 12:
+            parts.append("• … و" + str(len(items) - 12) + " حفلة كمان")
+    return "\n".join(parts)
 
 
 def one_pass():
@@ -206,7 +207,7 @@ def one_pass():
         if not state.get("warned"):
             state["warned"] = True
             save_state(state)
-            tg_s("\u26A0\uFE0F [elCinema] البوت مقدرش يقرا أي مواعيد.")
+            tg("\u26A0\uFE0F [elCinema] البوت مقدرش يقرا أي مواعيد.")
         return
     state["warned"] = False
     new = [r for r in rows if r["key"] not in state["seen"]]
@@ -216,22 +217,15 @@ def one_pass():
     if not state.get("bootstrapped"):
         state["bootstrapped"] = True
         save_state(state)
-        tg_s("\u2705 [elCinema] البوت التاني اشتغل على GitHub. اتسجّل "
+        tg("\u2705 [elCinema] البوت التاني اشتغل على GitHub. اتسجّل "
            + str(len(rows)) + " موعد كخط أساس.")
         return
+    save_state(state)
     if new:
         log(str(len(new)) + " new")
-        # Send BEFORE recording them. If Telegram is down the state does not
-        # advance, so the same showtimes are retried on the next pass.
-        batch = new[:MAX_NOTIFY] if MAX_NOTIFY > 0 else new
-        if not tg_s(format_message(batch)):
-            log("telegram failed - state not advanced, will retry")
-            return
+        tg(format_message(new[:MAX_NOTIFY]))
     else:
         log("no change (" + str(len(rows)) + " tracked)")
-    for r in rows:
-        state["seen"].setdefault(r["key"], now)
-    save_state(state)
 
 
 def main():
