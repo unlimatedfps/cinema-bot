@@ -29,7 +29,8 @@ STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "vox_state.json"))
 TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
-TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "12"))
+TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "35"))
+LANDING_TIMEOUT = int(os.getenv("LANDING_TIMEOUT", "60"))
 MAX_HORIZON = int(os.getenv("MAX_HORIZON_DAYS", "365"))
 
 S = requests.Session()
@@ -186,10 +187,10 @@ def html_fallback(html, page_date):
     return out
 
 
-def fetch(url):
-    for attempt in range(3):
+def fetch(url, timeout=None, attempts=3):
+    for attempt in range(attempts):
         try:
-            r = S.get(url, timeout=TIMEOUT)
+            r = S.get(url, timeout=timeout or TIMEOUT)
             if r.status_code == 200:
                 return r.text
             log("HTTP", r.status_code, url)
@@ -212,7 +213,7 @@ def discover_days():
     today = dt.datetime.now(CAIRO).date()
     base_url = BASE + "/showtimes?c=" + CINEMA
 
-    html = fetch(base_url)
+    html = fetch(base_url, timeout=LANDING_TIMEOUT, attempts=4)
     if not html:
         log("landing page unreadable - cannot list the days")
         return None
