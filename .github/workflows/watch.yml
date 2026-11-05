@@ -1,8 +1,11 @@
 name: cinema-watch
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+  # Schedule disabled: GitHub runners cannot reach egy.voxcinemas.com
+  # (every request times out), so every scheduled run burned 12 minutes
+  # and died before it could save state. Manual runs still work.
+  # schedule:
+  #   - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:

@@ -33,6 +33,7 @@ STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "state.json"))
 TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
+TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "12"))
 
 S = requests.Session()
 S.headers.update({
@@ -219,7 +220,7 @@ def html_fallback(html, page_date):
 def fetch(url):
     for attempt in range(3):
         try:
-            r = S.get(url, timeout=30)
+            r = S.get(url, timeout=TIMEOUT)
             if r.status_code == 200:
                 return r.text
             log("HTTP", r.status_code, url)
