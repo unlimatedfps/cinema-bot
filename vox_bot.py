@@ -212,14 +212,20 @@ def discover_days():
     """
     today = dt.datetime.now(CAIRO).date()
     base_url = BASE + "/showtimes?c=" + CINEMA
+    today_url = base_url + "&d=" + today.strftime("%Y%m%d")
 
-    html = fetch(base_url, timeout=LANDING_TIMEOUT, attempts=4)
+    # The bare landing page never answers - it hangs until the socket times
+    # out - while a dated page returns in seconds. The day tabs are on every
+    # page, so read the list off today's page instead.
+    html = fetch(today_url, timeout=LANDING_TIMEOUT)
     if not html:
-        log("landing page unreadable - cannot list the days")
+        log("today's page unreadable - trying the bare landing page")
+        html = fetch(base_url, timeout=LANDING_TIMEOUT)
+    if not html:
+        log("cannot list the days")
         return None
 
-    # The landing page itself is the cinema page for today.
-    days = {today.isoformat(): base_url}
+    days = {today.isoformat(): today_url}
     skipped = 0
     for m in DAY_LINK.finditer(html):
         raw = m.group(1)
