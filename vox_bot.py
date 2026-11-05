@@ -32,7 +32,7 @@ RUN_SECONDS = int(os.getenv("RUN_SECONDS", "-1"))
 STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "state.json"))
 TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "40"))
+MAX_NOTIFY = int(os.getenv("MAX_NOTIFY", "0"))  # 0 = no cap
 
 S = requests.Session()
 S.headers.update({
@@ -274,6 +274,24 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True), "utf-8")
 
 
+def chunk_lines(text, limit=3500):
+    """Split on line boundaries, never mid-tag: a <b> cut in half makes
+    Telegram reject the whole message with HTTP 400."""
+    out, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:
+            out.append(line[:limit])
+            line = line[limit:]
+        if cur and len(cur) + len(line) + 1 > limit:
+            out.append(cur)
+            cur = line
+        else:
+            cur = cur + "\n" + line if cur else line
+    if cur:
+        out.append(cur)
+    return out
+
+
 def tg(text):
     """Send to Telegram. Returns True only if every chunk went through."""
     if not TOKEN or not CHAT_ID:
@@ -281,17 +299,26 @@ def tg(text):
         return False
     url = "https://api.telegram.org/bot" + TOKEN + "/sendMessage"
     ok_all = True
-    for i in range(0, len(text), 3800):
-        data = {"chat_id": CHAT_ID, "text": text[i:i + 3800],
-                "parse_mode": "HTML", "disable_web_page_preview": True}
+    for chunk in chunk_lines(text):
         sent = False
         for attempt in range(3):
             try:
-                r = S.post(url, data=data, timeout=20)
+                r = S.post(url, data={"chat_id": CHAT_ID, "text": chunk,
+                                      "parse_mode": "HTML",
+                                      "disable_web_page_preview": True}, timeout=20)
                 if r.ok:
                     sent = True
                     break
                 log("telegram error:", r.status_code, r.text[:200])
+                if r.status_code == 400:
+                    # Malformed HTML would retry forever and block the state.
+                    # Resend once as plain text so the alert still arrives.
+                    plain = re.sub(r"</?b>", "", chunk)
+                    r2 = S.post(url, data={"chat_id": CHAT_ID, "text": plain,
+                                           "disable_web_page_preview": True}, timeout=20)
+                    if r2.ok:
+                        sent = True
+                        break
             except Exception as e:
                 log("telegram exception:", type(e).__name__)
             time.sleep(3 * (attempt + 1))
@@ -300,19 +327,66 @@ def tg(text):
     return ok_all
 
 
+AR_DAYS = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس",
+           "الجمعة", "السبت", "الأحد"]
+AR_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+             "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+
+
+def pretty_date(iso):
+    """2026-11-07 -> 'السبت 7 نوفمبر', with النهاردة/بكرة when it applies."""
+    try:
+        d = dt.date.fromisoformat(iso)
+    except ValueError:
+        return iso
+    label = "%s %d %s" % (AR_DAYS[d.weekday()], d.day, AR_MONTHS[d.month - 1])
+    delta = (d - dt.datetime.now(CAIRO).date()).days
+    if delta == 0:
+        return "النهاردة · " + label
+    if delta == 1:
+        return "بكرة · " + label
+    return label
+
+
+def h12(hhmm):
+    """'19:30' -> '7:30 PM'."""
+    h, mi = hhmm.split(":")
+    h = int(h)
+    return "%d:%s %s" % (h % 12 or 12, mi, "AM" if h < 12 else "PM")
+
+
+def night_key(hhmm):
+    """Sort a cinema day, not a clock day: a 00:15 show is the end of the
+    night, so anything before 06:00 sorts after the evening shows."""
+    h, mi = hhmm.split(":")
+    h = int(h)
+    return (h + 24 if h < 6 else h, int(mi))
+
+
 def format_message(rows):
+    parts = ["\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة — "
+             + CINEMA_LABEL + "</b>"]
     by_movie = {}
     for r in rows:
         by_movie.setdefault(r["movie"], []).append(r)
-    parts = ["\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة - " + CINEMA_LABEL + "</b>"]
-    for movie, items in by_movie.items():
-        parts.append("\n<b>" + movie + "</b>")
-        for r in sorted(items, key=lambda x: (x["date"], x["time"]))[:12]:
-            exp = " · " + r["experience"] if r["experience"] else ""
-            parts.append("• " + r["date"] + " — " + r["time"] + exp)
-        if len(items) > 12:
-            parts.append("• … و" + str(len(items) - 12) + " حفلة كمان")
-    parts.append("\n\U0001F517 " + BASE + "/showtimes?c=" + CINEMA)
+    for movie in sorted(by_movie):
+        parts.append("")
+        parts.append("<b>" + movie + "</b>")
+        by_date = {}
+        for r in by_movie[movie]:
+            by_date.setdefault(r["date"], []).append(r)
+        for date in sorted(by_date):
+            parts.append("\u25B8 " + pretty_date(date))
+            by_exp = {}
+            for r in by_date[date]:
+                by_exp.setdefault(r["experience"], set()).add(r["time"])
+            for exp in sorted(by_exp):
+                times = " · ".join(h12(t) for t in sorted(by_exp[exp],
+                                                              key=night_key))
+                parts.append(("   " + exp + ": " + times) if exp
+                             else ("   " + times))
+    parts.append("")
+    parts.append("\U0001F517 " + BASE + "/showtimes?c=" + CINEMA)
     return "\n".join(parts)
 
 
@@ -354,7 +428,8 @@ def one_pass():
         # Send BEFORE recording them. If Telegram is down the state does not
         # advance, so the same showtimes are retried on the next pass instead
         # of being lost.
-        if not tg(format_message(new[:MAX_NOTIFY])):
+        batch = new[:MAX_NOTIFY] if MAX_NOTIFY > 0 else new
+        if not tg(format_message(batch)):
             log("telegram failed - state not advanced, will retry")
             return
     else:
