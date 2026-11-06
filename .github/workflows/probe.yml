@@ -1,8 +1,7 @@
 name: probe-scene
 
-# Temporary, manual-only. Prints the showtime-bearing part of a Scene
-# Cinemas page into the job log, because artifact downloads are not
-# reachable from this session. Removed once the structure is known.
+# Temporary, manual-only. Finds the endpoint the date tabs call, so the
+# watcher can request a specific day directly instead of driving a browser.
 on:
   workflow_dispatch:
 
@@ -11,55 +10,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
-      - name: Fetch and dump
+      - name: Find the showtimes endpoint
         run: |
           UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          curl -sS -L -m 45 -A "$UA" -H 'Accept-Language: en-US,en;q=0.9,ar;q=0.8' \
-            'https://district5.scenecinemas.com/movie-details/the-cat-in-the-hat.html' -o cat.html
-          curl -sS -L -m 45 -A "$UA" -H 'Accept-Language: en-US,en;q=0.9,ar;q=0.8' \
-            'https://district5.scenecinemas.com/' -o home.html
+          B='https://district5.scenecinemas.com'
+          curl -sS -L -m 45 -A "$UA" "$B/movie-details/the-cat-in-the-hat.html" -o cat.html
+          curl -sS -L -m 45 -A "$UA" "$B/" -o home.html
           python3 - <<'PY'
-          import re, json, textwrap
-
+          import re, textwrap
           html = open('cat.html', encoding='utf-8', errors='replace').read()
-          print("LEN", len(html))
 
-          # A Next.js page usually ships its data as JSON; that is far better
-          # to parse than markup, so look for it first.
-          m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
-          print("HAS_NEXT_DATA", bool(m))
-          if m:
-              data = json.loads(m.group(1))
-              def walk(node, path="", depth=0):
-                  if depth > 6:
-                      return
-                  if isinstance(node, dict):
-                      for k, v in node.items():
-                          p = path + "." + k
-                          if isinstance(v, (dict, list)):
-                              print("KEY", p, type(v).__name__,
-                                    len(v) if isinstance(v, list) else "")
-                              walk(v, p, depth + 1)
-                  elif isinstance(node, list) and node:
-                      walk(node[0], path + "[0]", depth + 1)
-              walk(data)
-              blob = json.dumps(data, ensure_ascii=False)
-              for kw in ("showtime", "session", "Today", "06-11-2026", "05:15"):
-                  i = blob.find(kw)
-                  print("---- NEXTDATA near", kw, "at", i)
-                  if i > -1:
-                      print(blob[max(0, i-700):i+700])
-
-          print("======== RAW MARKUP AROUND showtime- ========")
-          idxs = [mm.start() for mm in re.finditer(r'showtime-', html)]
-          print("showtime link count:", len(idxs))
-          if idxs:
-              a = max(0, idxs[0] - 4000)
-              b = min(len(html), idxs[-1] + 1500)
-              for line in textwrap.wrap(html[a:b], 180):
+          print("======== LoadShowtimes DEFINITION ========")
+          for m in re.finditer(r'function\s+LoadShowtimes', html):
+              for line in textwrap.wrap(html[m.start():m.start()+1800], 170):
                   print(line)
 
-          print("======== DATE LABELS ========")
-          for mm in re.finditer(r'\d{2}-\d{2}-\d{4}', html):
-              print(repr(html[max(0, mm.start()-250):mm.end()+120]))
+          print("======== ANY ajax/url/post IN SCRIPTS ========")
+          for m in re.finditer(r'<script[^>]*>(.*?)</script>', html, re.S):
+              js = m.group(1)
+              if 'Showtime' in js or 'ajax' in js.lower():
+                  for line in textwrap.wrap(re.sub(r'\s+', ' ', js)[:2500], 170):
+                      print(line)
+                  print("  ---- end script ----")
+
+          print("======== MOVIE SLUGS ON HOME ========")
+          home = open('home.html', encoding='utf-8', errors='replace').read()
+          slugs = sorted(set(re.findall(r'/movie-details/([a-z0-9\-]+)\.html', home)))
+          print(len(slugs), "slugs")
+          for s in slugs:
+              print(" ", s)
           PY
