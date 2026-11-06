@@ -48,7 +48,9 @@ SLUG_RE = re.compile(r"/movie-details/([a-z0-9\-]+)\.html")
 DAY_TAB_RE = re.compile(r"id='data-(\d{2}-\d{2}-\d{4})'")
 TITLE_RE = re.compile(r'"movie_name"\s*:\s*"([^"]+)"')
 H1_RE = re.compile(r"<h1[^>]*>\s*([^<]{2,120}?)\s*</h1>")
-EXP_RE = re.compile(r'class="ex_stand"[^>]*>\s*([^<]{1,60}?)\s*<')
+# Each experience has its own class (ex_stand, ex_imax, ...), so match
+# the family rather than one spelling.
+EXP_RE = re.compile(r'class="ex_[a-z_]*"[^>]*>\s*([^<]{1,60}?)\s*<')
 SHOW_RE = re.compile(r'/showtime-([0-9a-zA-Z]+)"[^>]*>\s*(\d{1,2}:\d{2})\s*(AM|PM)', re.I)
 
 AR_DAYS = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس",

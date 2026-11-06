@@ -27,5 +27,18 @@ jobs:
           # showtime counts as new and the formatted message is printed.
           echo '{"seen":{},"bootstrapped":true}' > /tmp/probe_state.json
           start=$(date +%s)
-          python scene_bot.py | head -120
+          python - <<'PYX'
+          import scene_bot as s
+          rows, failed = s.collect()
+          print("ROWS", len(rows), "FAILED", failed[:5])
+          exps = {}
+          for r in rows:
+              exps[r["experience"]] = exps.get(r["experience"], 0) + 1
+          print("EXPERIENCES:")
+          for k, v in sorted(exps.items(), key=lambda x: -x[1]):
+              print("   %-28r %d" % (k, v))
+          print("MOVIES:", len({r["movie"] for r in rows}))
+          print("DATES:", sorted({r["date"] for r in rows}))
+          print("UNIQUE IDS:", len({r["id"] for r in rows}))
+          PYX
           echo "ELAPSED $(( $(date +%s) - start ))s"
