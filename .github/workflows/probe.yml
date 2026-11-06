@@ -1,0 +1,38 @@
+name: probe-scene
+
+# Temporary, manual-only. Fetches a few Scene Cinemas pages from a GitHub
+# runner and uploads them, to find out whether the site answers from here
+# at all and to get the real HTML before writing any parser against it.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Fetch pages
+        run: |
+          mkdir -p out
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          fetch () {
+            echo "=== $2 <- $1"
+            curl -sS -L -m 45 -A "$UA" \
+                 -H 'Accept-Language: en-US,en;q=0.9,ar;q=0.8' \
+                 -w 'HTTP %{http_code}  bytes=%{size_download}  time=%{time_total}s\n' \
+                 "$1" -o "out/$2" || echo "FAILED: $1"
+          }
+          fetch 'https://district5.scenecinemas.com/'                                  home.html
+          fetch 'https://district5.scenecinemas.com/movie-details/the-cat-in-the-hat.html' cat.html
+          fetch 'https://district5.scenecinemas.com/movie-details/godzilla-minus-zero.html' godzilla.html
+          fetch 'https://district5.scenecinemas.com/next_releasing'                     next.html
+          echo
+          ls -la out/
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scene-pages
+          path: out/
+          retention-days: 1
