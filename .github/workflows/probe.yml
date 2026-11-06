@@ -23,6 +23,9 @@ jobs:
           RUN_SECONDS: "0"
           STATE_FILE: "/tmp/probe_state.json"
         run: |
+          # Pre-seed as bootstrapped with nothing seen, so every parsed
+          # showtime counts as new and the formatted message is printed.
+          echo '{"seen":{},"bootstrapped":true}' > /tmp/probe_state.json
           start=$(date +%s)
-          python scene_bot.py
+          python scene_bot.py | head -120
           echo "ELAPSED $(( $(date +%s) - start ))s"
