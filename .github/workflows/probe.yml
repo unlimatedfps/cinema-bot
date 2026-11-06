@@ -1,42 +1,28 @@
 name: probe-scene
 
-# Temporary, manual-only. Finds the endpoint the date tabs call, so the
-# watcher can request a specific day directly instead of driving a browser.
+# Temporary, manual-only: runs scene_bot.py against the live site with no
+# Telegram and no saved state, printing what it parsed and how long a full
+# pass takes. Removed once the watcher is wired up for real.
 on:
   workflow_dispatch:
 
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 15
     steps:
-      - name: Find the showtimes endpoint
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Dry run
+        env:
+          DRY_RUN: "1"
+          RUN_SECONDS: "0"
+          STATE_FILE: "/tmp/probe_state.json"
         run: |
-          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-          B='https://district5.scenecinemas.com'
-          curl -sS -L -m 45 -A "$UA" "$B/movie-details/the-cat-in-the-hat.html" -o cat.html
-          curl -sS -L -m 45 -A "$UA" "$B/" -o home.html
-          python3 - <<'PY'
-          import re, textwrap
-          html = open('cat.html', encoding='utf-8', errors='replace').read()
-
-          print("======== LoadShowtimes DEFINITION ========")
-          for m in re.finditer(r'function\s+LoadShowtimes', html):
-              for line in textwrap.wrap(html[m.start():m.start()+1800], 170):
-                  print(line)
-
-          print("======== ANY ajax/url/post IN SCRIPTS ========")
-          for m in re.finditer(r'<script[^>]*>(.*?)</script>', html, re.S):
-              js = m.group(1)
-              if 'Showtime' in js or 'ajax' in js.lower():
-                  for line in textwrap.wrap(re.sub(r'\s+', ' ', js)[:2500], 170):
-                      print(line)
-                  print("  ---- end script ----")
-
-          print("======== MOVIE SLUGS ON HOME ========")
-          home = open('home.html', encoding='utf-8', errors='replace').read()
-          slugs = sorted(set(re.findall(r'/movie-details/([a-z0-9\-]+)\.html', home)))
-          print(len(slugs), "slugs")
-          for s in slugs:
-              print(" ", s)
-          PY
+          start=$(date +%s)
+          python scene_bot.py
+          echo "ELAPSED $(( $(date +%s) - start ))s"
