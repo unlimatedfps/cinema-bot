@@ -2,7 +2,9 @@ name: cinema-watch
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Every 30 min. A full pass is ~110 requests paced 2s apart,
+    # so the site sees well under one request per second.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

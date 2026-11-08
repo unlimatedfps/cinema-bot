@@ -34,7 +34,8 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 INTERVAL = int(os.getenv("INTERVAL_SECONDS", "600"))
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "0"))
 TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "30"))
-PAUSE = float(os.getenv("REQUEST_PAUSE", "0.4"))
+PAUSE = float(os.getenv("REQUEST_PAUSE", "2.0"))
+FAILS_BEFORE_ALERT = int(os.getenv("FAILS_BEFORE_ALERT", "3"))
 DRY_RUN = os.getenv("DRY_RUN", "") == "1"
 
 S = requests.Session()
@@ -112,6 +113,10 @@ def fetch(url):
             if r.status_code == 200:
                 return r.text
             log("HTTP", r.status_code, url)
+            if r.status_code in (403, 429):
+                # Being told to back off. Retrying now makes it worse; give
+                # up on this pass and let the next one try later.
+                return None
             if r.status_code == 404:
                 return None
         except Exception as e:
