@@ -307,13 +307,20 @@ def one_pass():
         log("failed:", ", ".join(failed[:8]), "..." if len(failed) > 8 else "")
 
     if not rows:
-        log("nothing parsed")
-        if not state.get("warned"):
-            state["warned"] = True
-            save_state(state)
-            tg("⚠️ البوت مقدرش يقرا أي مواعيد من " + LABEL + ".")
+        # One blocked pass is not news. The site occasionally refuses a
+        # single burst, and the next pass usually goes through.
+        fails = state.get("fails", 0) + 1
+        state["fails"] = fails
+        log("nothing parsed (consecutive failures: %d)" % fails)
+        save_state(state)
+        if fails == FAILS_BEFORE_ALERT:
+            tg("⚠️ البوت مقدرش يقرا أي مواعيد من " + LABEL
+               + " في " + str(fails) + " محاولات متتالية.")
         return
-    state["warned"] = False
+    if state.get("fails"):
+        log("recovered after", state["fails"], "failed passes")
+    state["fails"] = 0
+    state.pop("warned", None)
     log("parsed", len(rows), "showtimes")
 
     now = dt.datetime.now(CAIRO).isoformat(timespec="seconds")
