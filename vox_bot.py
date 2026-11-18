@@ -150,32 +150,66 @@ def html_fallback(html, page_date):
 
 
 def fetch(url):
-    for attempt in range(2):
+    import subprocess
+    for attempt in range(3):
         try:
-            r = S.get(url, timeout=30)
-            if r.status_code == 200:
-                return r.text
-            log("HTTP", r.status_code, url)
+            out = subprocess.run(
+                ["curl", "-sL", "--compressed", "--max-time", "30", url],
+                capture_output=True, timeout=45)
+            txt = out.stdout.decode("utf-8", "replace")
+            if len(txt) > 5000:
+                return txt
+            log("curl short:", out.returncode, len(txt))
         except Exception as e:
             log("fetch error:", type(e).__name__)
-        time.sleep(3 + attempt * 3 + random.random())
+        time.sleep(2 + attempt * 3 + random.random())
     return None
+
+
+DATE_LINK_RE = re.compile(r'/showtimes\?c(?:&#x3D;|=)[^"&]+(?:&amp;|&)d(?:&#x3D;|=)(\d{8})', re.I)
+
+
+def available_days():
+    html = fetch(BASE + "/showtimes?c=" + CINEMA)
+    days = sorted(set(DATE_LINK_RE.findall(html or "")))
+    today = dt.datetime.now(CAIRO).date().strftime("%Y%m%d")
+    days = [d for d in days if d >= today]
+    if not days:
+        t = dt.datetime.now(CAIRO).date()
+        days = [(t + dt.timedelta(days=i)).strftime("%Y%m%d") for i in range(DAYS_AHEAD)]
+        log("!! no date links found, falling back to", len(days), "days")
+    else:
+        log("available days:", len(days), days[:5], "...")
+    # The "Today" tab has no date in its link: today's showtimes are on this
+    # landing page itself. Hand it back so collect() can read it.
+    return days, html
 
 
 def collect():
     today = dt.datetime.now(CAIRO).date()
     seen, out = set(), []
-    for i in range(DAYS_AHEAD):
-        d = (today + dt.timedelta(days=i)).isoformat()
+    days, landing = available_days()
+    today_s = today.strftime("%Y%m%d")
+    pages = []
+    for d in days:
         html = fetch(BASE + "/showtimes?c=" + CINEMA + "&d=" + d)
         if not html:
             continue
-        rows = []
-        for blob in json_blobs(html):
-            walk(blob, {}, rows, d)
-        if not rows:
-            rows = html_fallback(html, d)
-        log("day", d, "->", len(rows), "showtimes")
+        pages.append((d, parse_page(html, d)))
+        log("day", d, "->", len(pages[-1][1]), "showtimes")
+        time.sleep(1.5)
+    if landing and today_s not in days:
+        rows = parse_page(landing, today_s)
+        sig = signature(rows)
+        same = [d for d, r in pages if r and signature(r) == sig]
+        if same:
+            # The landing page fell back to another day's listing; do not
+            # file those showtimes under today's date.
+            log("Today tab = same as day", same[0], "-> skipped")
+        else:
+            log("day", today_s, "(Today tab) ->", len(rows), "showtimes")
+            pages.insert(0, (today_s, rows))
+    for d, rows in pages:
         for r in rows:
             key = "|".join([r["date"], r["cinema"], r["movie"], r["time"], r["experience"]])
             if key in seen:
@@ -183,8 +217,20 @@ def collect():
             seen.add(key)
             r["key"] = key
             out.append(r)
-        time.sleep(1.5)
     return out
+
+
+def parse_page(html, d):
+    rows = []
+    for blob in json_blobs(html):
+        walk(blob, {}, rows, d)
+    if not rows:
+        rows = html_fallback(html, d)
+    return rows
+
+
+def signature(rows):
+    return sorted(set((r["movie"], r["time"], r["experience"]) for r in rows))
 
 
 def load_state():
