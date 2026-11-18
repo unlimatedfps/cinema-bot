@@ -248,39 +248,58 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True), "utf-8")
 
 
+MSG_LIMIT = 3500
+
+
 def tg(text):
+    """Send one message. True only if Telegram accepted it."""
     if not TOKEN or not CHAT_ID:
         log("!! telegram secrets missing")
-        return
+        return False
     url = "https://api.telegram.org/bot" + TOKEN + "/sendMessage"
-    for i in range(0, len(text), 3800):
-        data = {"chat_id": CHAT_ID, "text": text[i:i + 3800],
-                "parse_mode": "HTML", "disable_web_page_preview": True}
-        for attempt in range(3):
-            try:
-                r = S.post(url, data=data, timeout=20)
-                if r.ok:
-                    break
-                log("telegram error:", r.status_code, r.text[:200])
-            except Exception as e:
-                log("telegram exception:", type(e).__name__)
-            time.sleep(3 * (attempt + 1))
+    data = {"chat_id": CHAT_ID, "text": text,
+            "parse_mode": "HTML", "disable_web_page_preview": True}
+    for attempt in range(3):
+        try:
+            r = S.post(url, data=data, timeout=20)
+            if r.ok:
+                return True
+            log("telegram error:", r.status_code, r.text[:200])
+        except Exception as e:
+            log("telegram exception:", type(e).__name__)
+        time.sleep(3 * (attempt + 1))
+    return False
 
 
-def format_message(rows):
+def build_messages(rows):
+    """Group by movie, then pack whole lines into messages under the limit.
+    Nothing is dropped and no HTML tag is cut."""
     by_movie = {}
     for r in rows:
         by_movie.setdefault(r["movie"], []).append(r)
-    parts = ["\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة - الماظة</b>"]
+    blocks = []
     for movie, items in by_movie.items():
-        parts.append("\n<b>" + movie + "</b>")
-        for r in sorted(items, key=lambda x: (x["date"], x["time"]))[:12]:
+        head = "<b>" + movie + "</b>"
+        cur = "\n" + head
+        for r in sorted(items, key=lambda x: (x["date"], x["time"])):
             exp = " · " + r["experience"] if r["experience"] else ""
-            parts.append("• " + r["date"] + " — " + r["time"] + exp)
-        if len(items) > 12:
-            parts.append("• … و" + str(len(items) - 12) + " حفلة كمان")
-    parts.append("\n\U0001F517 " + BASE + "/showtimes?c=" + CINEMA)
-    return "\n".join(parts)
+            ln = "\n• " + r["date"] + " — " + r["time"] + exp
+            if len(cur) + len(ln) > MSG_LIMIT:
+                blocks.append(cur)
+                cur = "\n" + head + " (تكملة)"
+            cur += ln
+        blocks.append(cur)
+    msgs, cur = [], ""
+    for b in blocks:
+        if cur and len(cur) + len(b) > MSG_LIMIT:
+            msgs.append(cur)
+            cur = ""
+        cur += b
+    msgs.append(cur)
+    head = "\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة - الماظة</b>"
+    msgs[0] = head + msgs[0]
+    msgs[-1] += "\n\n\U0001F517 " + BASE + "/showtimes?c=" + CINEMA
+    return msgs
 
 
 def one_pass():
@@ -289,21 +308,28 @@ def one_pass():
     if not rows:
         log("nothing parsed")
         return
-    new = [r for r in rows if r["key"] not in state["seen"]]
     now = dt.datetime.now(CAIRO).isoformat(timespec="seconds")
-    for r in rows:
-        state["seen"].setdefault(r["key"], now)
     if not state.get("bootstrapped"):
+        for r in rows:
+            state["seen"].setdefault(r["key"], now)
         state["bootstrapped"] = True
         save_state(state)
         tg("\u2705 البوت اشتغل من الموبايل. اتسجّل " + str(len(rows)) + " موعد كخط أساس.")
         return
-    save_state(state)
-    if new:
-        log(str(len(new)) + " new")
-        tg(format_message(new[:MAX_NOTIFY]))
-    else:
+    new = [r for r in rows if r["key"] not in state["seen"]]
+    if not new:
         log("no change (" + str(len(rows)) + " tracked)")
+        save_state(state)
+        return
+    log(str(len(new)) + " new")
+    # Send first. Only mark as seen once Telegram has accepted everything,
+    # so a failed send is retried on the next pass instead of lost.
+    if not all(tg(m) for m in build_messages(new)):
+        log("!! telegram failed, not marked as seen; will retry next pass")
+        return
+    for r in new:
+        state["seen"][r["key"]] = now
+    save_state(state)
 
 
 if __name__ == "__main__":
