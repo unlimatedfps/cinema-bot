@@ -267,7 +267,28 @@ def tg(text):
             log("telegram error:", r.status_code, r.text[:200])
         except Exception as e:
             log("telegram exception:", type(e).__name__)
+        # Same trick as fetch(): on this phone curl often gets through
+        # when requests times out.
+        if tg_curl(url, data):
+            return True
         time.sleep(3 * (attempt + 1))
+    return False
+
+
+def tg_curl(url, data):
+    import subprocess
+    cmd = ["curl", "-s", "--max-time", "30", url]
+    for k, v in data.items():
+        cmd += ["--data-urlencode", "%s=%s" % (k, v)]
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=40)
+        body = out.stdout.decode("utf-8", "replace")
+        if '"ok":true' in body:
+            log("telegram sent via curl")
+            return True
+        log("telegram curl failed:", out.returncode, body[:150])
+    except Exception as e:
+        log("telegram curl exception:", type(e).__name__)
     return False
 
 
