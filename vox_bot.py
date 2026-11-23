@@ -249,6 +249,7 @@ def save_state(state):
 
 
 MSG_LIMIT = 3500
+PRIORITY = ["doomsday"]
 
 
 def tg(text):
@@ -299,8 +300,11 @@ def build_messages(rows):
     for r in rows:
         by_movie.setdefault(r["movie"], []).append(r)
     blocks = []
-    for movie, items in by_movie.items():
-        head = "<b>" + movie + "</b>"
+    def is_vip(m):
+        return any(k in m.lower() for k in PRIORITY)
+    for movie in sorted(by_movie, key=lambda m: not is_vip(m)):
+        items = by_movie[movie]
+        head = ("\U0001F525 " if is_vip(movie) else "") + "<b>" + movie + "</b>"
         cur = "\n" + head
         for r in sorted(items, key=lambda x: (x["date"], x["time"])):
             exp = " · " + r["experience"] if r["experience"] else ""
@@ -318,6 +322,8 @@ def build_messages(rows):
         cur += b
     msgs.append(cur)
     head = "\U0001F3AC <b>نزلت " + str(len(rows)) + " حفلة جديدة - الماظة</b>"
+    if any(is_vip(m) for m in by_movie):
+        head = "\U0001F6A8 <b>نزلت حفلات Avengers: Doomsday!</b>\n" + head
     msgs[0] = head + msgs[0]
     msgs[-1] += "\n\n\U0001F517 " + BASE + "/showtimes?c=" + CINEMA
     return msgs
