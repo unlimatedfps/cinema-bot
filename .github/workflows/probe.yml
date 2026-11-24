@@ -3,26 +3,16 @@ on: workflow_dispatch
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - run: |
-          UA="Mozilla/5.0 (Linux; Android 13) Chrome/131 Mobile Safari/537.36"
-          B="https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"
-          for d in "" 20261125 20261216 20261217; do
-            url="$B"; [ -n "$d" ] && url="$B&d=$d"
-            curl -sSL --compressed -A "$UA" "$url" -o "p$d.html"; sleep 2
-            python3 - "p$d.html" <<'PY'
-          import re,sys,collections
-          h=open(sys.argv[1],encoding='utf-8',errors='replace').read()
-          hid=re.search(r'name="d"\s+value="(\d*)"',h)
-          print('==',sys.argv[1],'hidden d:',hid and hid.group(1))
-          print(' h3:',collections.Counter(re.findall(r'<h3[^>]*>\s*([^<]+?)\s*</h3>',h)))
-          print(' booking prefixes:',collections.Counter(re.findall(r'/booking/(\d+)-',h)))
-          print(' lela:', len(re.findall('lela-bazit',h)))
+          python3 - <<'PY'
+          import vox_bot as v
+          html = v.fetch(v.BASE + "/showtimes?c=" + v.CINEMA + "&d=20261125")
+          i = html.find('data-slug="lela-bazit-khalis-arabic"'); import re
+          seg = html[i:i+20000]; seg = seg[:seg.find('<article',10)] if '<article' in seg[10:] else seg
+          print("cinemas in Lela block:", re.findall(r'<h3[^>]*>\s*([^<]+?)\s*</h3>', seg))
+          for r in v.parse_page(html, "20261125"):
+              if "Lela" in r["movie"]: print(r["date"], v.nice_time(r["time"]), r["experience"])
           PY
-          done
-          curl -sSL --compressed -A "$UA" "https://egy.voxcinemas.com/movies/lela-bazit-khalis-arabic" -o lela.html
-          python3 -c "
-          import re,collections;h=open('lela.html',encoding='utf-8',errors='replace').read()
-          print('lela movie page h3:',collections.Counter(re.findall(r'<h3[^>]*>\s*([^<]+?)\s*</h3>',h)))
-          print('prefixes:',collections.Counter(re.findall(r'/booking/(\d+)-',h)))"
