@@ -312,6 +312,22 @@ def tg_curl(url, data):
     return False
 
 
+def nice_date(d):
+    try:
+        return d[:4] + "-" + d[4:6] + "-" + d[6:8] if len(d) == 8 and d.isdigit() else d
+    except Exception:
+        return d
+
+
+def nice_time(t):
+    try:
+        h, m = t.split(":")
+        h = int(h)
+        return "%d:%s %s" % (h % 12 or 12, m, "AM" if h < 12 else "PM")
+    except Exception:
+        return t
+
+
 def build_messages(rows):
     """Group by movie, then pack whole lines into messages under the limit.
     Nothing is dropped and no HTML tag is cut."""
@@ -327,7 +343,7 @@ def build_messages(rows):
         cur = "\n" + head
         for r in sorted(items, key=lambda x: (x["date"], x["time"])):
             exp = " · " + r["experience"] if r["experience"] else ""
-            ln = "\n• " + r["date"] + " — " + r["time"] + exp
+            ln = "\n• " + nice_date(r["date"]) + " — " + nice_time(r["time"]) + exp
             if len(cur) + len(ln) > MSG_LIMIT:
                 blocks.append(cur)
                 cur = "\n" + head + " (تكملة)"
