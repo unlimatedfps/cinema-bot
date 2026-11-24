@@ -7,16 +7,19 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          for u in "https://elcinema.com/en/theater/3101219/" "https://elcinema.com/en/work/2097036/" "https://elcinema.com/en/work/2097036/theater/EG/"; do
-            curl -sSL --compressed -A "$UA" "$u" -o x.html -w "== $u HTTP %{http_code} %{size_download}\n"
-            python3 - <<'PY'
+          curl -sSL --compressed -A "$UA" "https://elcinema.com/en/theater/3101219/" -o t.html
+          curl -sSL --compressed -A "$UA" "https://elcinema.com/en/work/2097036/theater/EG/" -o w.html
+          python3 - <<'PY'
           import re
-          h=open('x.html',encoding='utf-8',errors='replace').read()
-          print(' title:',re.findall(r'<title>(.*?)</title>',h,re.S)[:1], ' blocked:', 'not available in your' in h or 'غير متاحة في موقعك' in h)
-          t=re.sub(r'<script.*?</script>|<style.*?</style>','',h,flags=re.S); t=re.sub(r'<[^>]+>',' | ',t); t=re.sub(r'(\s*\|\s*)+',' | ',t)
-          for k in ['Avengers','Doomsday','Showtimes','showtimes',':']:
-              i=t.find(k)
-              if i>0: print(' ['+k+']', t[max(0,i-300):i+900]); break
-          print(' booking links:',sorted(set(re.findall(r'href="(/[^"]*booking[^"]*)"',h)))[:15])
+          h=open('t.html',encoding='utf-8',errors='replace').read()
+          i=h.find('/en/work/2095116'); j=h.find('/en/booking/2095318')
+          print(re.sub(r'\n\s*\n+','\n',h[i-2500:j+300]))
+          print('==== dates/tabs:', sorted(set(re.findall(r'(?:date|day)=[0-9-]+',h)))[:20])
+          w=open('w.html',encoding='utf-8',errors='replace').read()
+          k=w.find('Watch in Cinemas',2000)
+          t=re.sub(r'<script.*?</script>|<style.*?</style>','',w,flags=re.S)
+          i=t.find('<div class="intro-box'); 
+          body=re.sub(r'\n\s*\n+','\n',re.sub(r'<[^>]+>','\n',t))
+          a=body.find('Watch in Cinemas',body.find('Watch in Cinemas')+10)
+          print('==== work page body:', body[a-200:a+1200])
           PY
-          done
