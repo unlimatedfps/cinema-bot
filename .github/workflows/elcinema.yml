@@ -1,0 +1,60 @@
+name: elcinema-doomsday
+
+on:
+  schedule:
+    # GitHub's shortest schedule; runs can start a few minutes late.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the message instead of sending it"
+        type: boolean
+        default: false
+      work_id:
+        description: "elCinema movie id (test only; empty = Avengers: Doomsday)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: elcinema
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Check elCinema
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          ELCINEMA_WORK_ID: ${{ inputs.work_id || '2097036' }}
+        run: |
+          if [ -n "${{ inputs.work_id }}" ]; then export STATE_FILE=/tmp/test_state.json; fi
+          python elcinema_bot.py
+
+      - name: Commit state
+        if: ${{ !inputs.dry_run && !inputs.work_id }}
+        run: |
+          git config user.name  "cinema-bot"
+          git config user.email "cinema-bot@users.noreply.github.com"
+          git add elcinema_state.json 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "elcinema state $(date -u +%FT%TZ)"
+          for i in 1 2 3; do
+            git pull --rebase --autostash -X ours && git push && exit 0
+            sleep 5
+          done
+          exit 1
