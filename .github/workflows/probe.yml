@@ -7,16 +7,16 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          curl -sSL --compressed -A "$UA" -w "\nHTTP %{http_code} %{size_download} %{url_effective}\n" "https://elcinema.com/booking/2097036/3101219/" -o b.html | tail -1
-          curl -sSL --compressed -A "$UA" -w "\nHTTP %{http_code} %{size_download} %{url_effective}\n" "https://elcinema.com/en/booking/2097036/3101219/" -o be.html | tail -1
-          python3 - <<'PY'
+          for u in "https://elcinema.com/en/theater/3101219/" "https://elcinema.com/en/work/2097036/" "https://elcinema.com/en/work/2097036/theater/EG/"; do
+            curl -sSL --compressed -A "$UA" "$u" -o x.html -w "== $u HTTP %{http_code} %{size_download}\n"
+            python3 - <<'PY'
           import re
-          for f in ['b.html','be.html']:
-              h=open(f,encoding='utf-8',errors='replace').read()
-              print('=====',f,len(h))
-              print(re.findall(r'<title>(.*?)</title>',h,re.S))
-              t=re.sub(r'<script.*?</script>|<style.*?</style>','',h,flags=re.S)
-              t=re.sub(r'<[^>]+>','\n',t); t=re.sub(r'\n\s*\n+','\n',t)
-              i=max(0,t.find('Avengers')-200); print(t[:200]); print('...'); print(t[i:i+3500])
-              print('links:',sorted(set(re.findall(r'href="(/[^"]*(?:booking|showtime|theater|cinema)[^"]*)"',h)))[:60])
+          h=open('x.html',encoding='utf-8',errors='replace').read()
+          print(' title:',re.findall(r'<title>(.*?)</title>',h,re.S)[:1], ' blocked:', 'not available in your' in h or 'غير متاحة في موقعك' in h)
+          t=re.sub(r'<script.*?</script>|<style.*?</style>','',h,flags=re.S); t=re.sub(r'<[^>]+>',' | ',t); t=re.sub(r'(\s*\|\s*)+',' | ',t)
+          for k in ['Avengers','Doomsday','Showtimes','showtimes',':']:
+              i=t.find(k)
+              if i>0: print(' ['+k+']', t[max(0,i-300):i+900]); break
+          print(' booking links:',sorted(set(re.findall(r'href="(/[^"]*booking[^"]*)"',h)))[:15])
           PY
+          done
