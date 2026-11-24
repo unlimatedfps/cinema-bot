@@ -7,10 +7,12 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36"
-          curl -sSL -A "$UA" -o idx.html -w "index %{http_code} %{size_download}\n" https://www.tazkarti.com/ || true
-          head -c 3000 idx.html; echo
-          for js in $(grep -oE 'src="[^"]+\.js"' idx.html | sed 's/src="//;s/"//'); do
-            curl -sSL -A "$UA" -o "b_$(basename $js)" "https://www.tazkarti.com/$js"
-            echo "== $js $(wc -c < b_$(basename $js))"
-            grep -oE '"[^"]{0,80}(api|Api|API|json|data/)[^"]{0,80}"' "b_$(basename $js)" | sort -u | head -80
-          done
+          js=$(curl -sSL -A "$UA" https://www.tazkarti.com/ | grep -oE 'main\.[a-f0-9]+\.js' | head -1)
+          curl -sSL -A "$UA" -o m.js "https://www.tazkarti.com/$js"
+          python3 - <<'PY'
+          import re
+          s=open('m.js',encoding='utf-8',errors='replace').read()
+          for k in ['MatchesStatic_APIURL','MatchesAPIURL:','getMatchesAPIURL()+','.json?_=','matches-list','MatchesStatic','tazkarti.com/']:
+              for m in list(re.finditer(re.escape(k),s))[:6]:
+                  print('##',k,'::',s[max(0,m.start()-250):m.end()+250].replace('\n',' '))
+          PY
