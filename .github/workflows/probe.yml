@@ -1,0 +1,17 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          curl -sSL -A "Mozilla/5.0" "https://www.tazkarti.com/data/matches-list-json.json?_=$(date +%s)000" -o ml.json
+          python3 -c "
+          import json
+          for m in json.load(open('ml.json',encoding='utf-8-sig')):
+              t=m.get('tournament') or {}
+              print(m['matchId'], m['teamName1'],'x',m['teamName2'],'| gameId',t.get('gameId'),'| type',t.get('type'),'|',t.get('nameEn'),'|',{k:v for k,v in t.items() if 'game' in k.lower() or 'sport' in k.lower()}, {k:v for k,v in m.items() if 'game' in k.lower() or 'sport' in k.lower()})
+          "
+          curl -sSL -A "Mozilla/5.0" -w "\nHTTP %{http_code}\n" "https://www.tazkarti.com/assets/lookup/games.json" | head -c 800; echo
+          curl -sSL -A "Mozilla/5.0" "https://www.tazkarti.com/" | grep -oE 'main\.[a-f0-9]+\.js' | head -1 > js; curl -sSL -A "Mozilla/5.0" "https://www.tazkarti.com/$(cat js)" | grep -oE '.{150}gameId.{150}' | head -8
