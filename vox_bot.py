@@ -136,8 +136,27 @@ def walk(node, ctx, out, page_date):
             walk(it, dict(ctx), out, page_date)
 
 
+SHOW_RE = re.compile(
+    r'<article[^>]*data-slug="([^"]+)"'
+    r'|<strong>\s*([^<]{1,40}?)\s*</strong>'
+    r'|class="action showtime[^"]*"[^>]*>\s*((?:[01]?\d|2[0-3]):[0-5]\d\s*(?:AM|PM|am|pm)?)\s*<')
+
+
 def html_fallback(html, page_date):
-    out, movie = [], "?"
+    out, movie, exp = [], "?", ""
+    if "movie-compare" in html:
+        for m in SHOW_RE.finditer(html):
+            if m.group(1):
+                movie, exp = m.group(1).replace("-", " ").title(), ""
+            elif m.group(2):
+                exp = m.group(2).strip()
+            elif m.group(3):
+                d, hhmm = to_hhmm(m.group(3), page_date)
+                if hhmm and movie != "?":
+                    out.append({"date": d or page_date, "time": hhmm, "movie": movie,
+                                "cinema": CINEMA, "experience": exp})
+        if out:
+            return out
     for m in TOKEN_RE.finditer(html):
         if m.group(1):
             movie = m.group(1).replace("-", " ").title()
@@ -343,6 +362,15 @@ def one_pass():
         save_state(state)
         tg("\u2705 البوت اشتغل من الموبايل. اتسجّل " + str(len(rows)) + " موعد كخط أساس.")
         return
+    if not state.get("formats_v1"):
+        # One-time switch: showtimes already seen without a format are
+        # filed under their new keys silently, so no flood of old alerts.
+        for r in rows:
+            old = r["key"].rsplit("|", 1)[0] + "|"
+            if old in state["seen"]:
+                state["seen"].setdefault(r["key"], state["seen"][old])
+        state["formats_v1"] = True
+        log("formats enabled")
     new = [r for r in rows if r["key"] not in state["seen"]]
     if not new:
         log("no change (" + str(len(rows)) + " tracked)")
