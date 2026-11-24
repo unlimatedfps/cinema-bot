@@ -7,12 +7,17 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36"
-          js=$(curl -sSL -A "$UA" https://www.tazkarti.com/ | grep -oE 'main\.[a-f0-9]+\.js' | head -1)
-          curl -sSL -A "$UA" -o m.js "https://www.tazkarti.com/$js"
+          curl -sSL -A "$UA" -w "\nHTTP %{http_code} %{size_download}\n" "https://www.tazkarti.com/data/matches-list-json.json?_=$(date +%s)000" -o ml.json
           python3 - <<'PY'
-          import re
-          s=open('m.js',encoding='utf-8',errors='replace').read()
-          for k in ['MatchesStatic_APIURL','MatchesAPIURL:','getMatchesAPIURL()+','.json?_=','matches-list','MatchesStatic','tazkarti.com/']:
-              for m in list(re.finditer(re.escape(k),s))[:6]:
-                  print('##',k,'::',s[max(0,m.start()-250):m.end()+250].replace('\n',' '))
+          import json
+          raw=open('ml.json',encoding='utf-8-sig').read()
+          print('len',len(raw)); print(raw[:300])
+          d=json.loads(raw)
+          print(type(d), list(d.keys())[:20] if isinstance(d,dict) else len(d))
+          items = d if isinstance(d,list) else next((v for v in d.values() if isinstance(v,list)),[])
+          print('items',len(items))
+          for it in items[:3]: print(json.dumps(it,ensure_ascii=False)[:1500]); print('---')
+          for it in items:
+              print({k:v for k,v in it.items() if any(x in k.lower() for x in ['team','status','date','id','name','kick','stad','avail','ticket']) and not isinstance(v,(dict,list))})
           PY
+          curl -sSL -A "$UA" -w "\nHTTP %{http_code}\n" "https://www.tazkarti.com/data/teamGroups.json" | head -c 600
