@@ -204,6 +204,17 @@ def available_days():
     return days, html
 
 
+LANDING_DATE_RE = re.compile(r'name="d"\s+value="(\d{8})"')
+
+
+def landing_date(html, fallback):
+    # VOX's "Today" runs on the cinema's business day, which goes on past
+    # midnight. The page says which day it really is in a hidden field;
+    # trust that over the phone's clock.
+    m = LANDING_DATE_RE.search(html or "")
+    return m.group(1) if m else fallback
+
+
 def collect():
     today = dt.datetime.now(CAIRO).date()
     seen, out = set(), []
@@ -217,8 +228,11 @@ def collect():
         pages.append((d, parse_page(html, d)))
         log("day", d, "->", len(pages[-1][1]), "showtimes")
         time.sleep(1.5)
-    if landing and today_s not in days:
-        rows = parse_page(landing, today_s)
+    land_d = landing_date(landing, today_s) if landing else today_s
+    if land_d != today_s:
+        log("Today tab is really", land_d)
+    if landing and land_d not in days:
+        rows = parse_page(landing, land_d)
         sig = signature(rows)
         same = [d for d, r in pages if r and signature(r) == sig]
         if same:
@@ -226,8 +240,8 @@ def collect():
             # file those showtimes under today's date.
             log("Today tab = same as day", same[0], "-> skipped")
         else:
-            log("day", today_s, "(Today tab) ->", len(rows), "showtimes")
-            pages.insert(0, (today_s, rows))
+            log("day", land_d, "(Today tab) ->", len(rows), "showtimes")
+            pages.insert(0, (land_d, rows))
     for d, rows in pages:
         for r in rows:
             key = "|".join([r["date"], r["cinema"], r["movie"], r["time"], r["experience"]])
