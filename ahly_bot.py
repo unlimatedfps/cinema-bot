@@ -24,6 +24,9 @@ DRY_RUN = os.getenv("DRY_RUN") == "1"
 # Al Ahly's id on Tazkarti is 77; the names are a fallback in case it changes.
 TEAM_IDS = {77}
 TEAM_NAMES = {"al ahly fc", "al ahly", "النادي الأهلى", "النادي الأهلي"}
+# Tazkarti uses the same team for every sport; tournament.gameId 1 is football
+# (3 is basketball). A match with no gameId is kept, so football is never missed.
+FOOTBALL_GAME_ID = 1
 
 UA = ("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
@@ -51,6 +54,11 @@ def fetch_matches():
             log("fetch error:", type(e).__name__, str(e)[:120])
         time.sleep(3 * (attempt + 1))
     return None
+
+
+def is_football(m):
+    gid = (m.get("tournament") or {}).get("gameId")
+    return gid is None or gid == FOOTBALL_GAME_ID
 
 
 def is_ahly(m):
@@ -139,8 +147,9 @@ def main():
     if matches is None:
         log("!! could not read Tazkarti this time; nothing changed")
         return
-    ahly = [m for m in matches if is_ahly(m) and m.get("matchId") is not None]
-    log("matches on Tazkarti:", len(matches), "| Al Ahly:", len(ahly))
+    ahly = [m for m in matches
+            if is_ahly(m) and is_football(m) and m.get("matchId") is not None]
+    log("matches on Tazkarti:", len(matches), "| Al Ahly football:", len(ahly))
     state = load_state()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
