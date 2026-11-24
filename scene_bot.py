@@ -37,6 +37,9 @@ TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "30"))
 PAUSE = float(os.getenv("REQUEST_PAUSE", "2.0"))
 FAILS_BEFORE_ALERT = int(os.getenv("FAILS_BEFORE_ALERT", "3"))
 DRY_RUN = os.getenv("DRY_RUN", "") == "1"
+# Comma-separated words; when set, only movies whose page slug contains one of
+# them are followed (e.g. "doomsday"). Empty = every movie, as before.
+MOVIE_FILTER = [w.strip().lower() for w in os.getenv("MOVIE_FILTER", "").split(",") if w.strip()]
 
 S = requests.Session()
 S.headers.update({
@@ -166,6 +169,9 @@ def collect():
 
     slugs = sorted(set(SLUG_RE.findall(home)))
     log("movies listed:", len(slugs))
+    if MOVIE_FILTER:
+        slugs = [x for x in slugs if any(w in x for w in MOVIE_FILTER)]
+        log("following only", MOVIE_FILTER, "->", slugs or "not listed yet")
 
     rows, failed, seen_ids = [], [], set()
     for slug in slugs:
@@ -306,6 +312,14 @@ def one_pass():
     if failed:
         log("failed:", ", ".join(failed[:8]), "..." if len(failed) > 8 else "")
 
+    if not rows and not failed and MOVIE_FILTER:
+        # Everything was read fine; the followed movie just has no
+        # showtimes on the site yet. That is not a failure.
+        if state.get("fails"):
+            state["fails"] = 0
+        log("no showtimes yet for", MOVIE_FILTER)
+        save_state(state)
+        return
     if not rows:
         # One blocked pass is not news. The site occasionally refuses a
         # single burst, and the next pass usually goes through.

@@ -2,10 +2,15 @@ name: cinema-watch
 
 on:
   schedule:
-    # Every 30 min. A full pass is ~110 requests paced 2s apart,
-    # so the site sees well under one request per second.
-    - cron: "*/30 * * * *"
+    # Only Avengers: Doomsday is followed now, so a pass is a handful of
+    # requests and can run every 5 min (GitHub may start runs late).
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the message instead of sending it"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -32,12 +37,15 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STATE_FILE: "scene_state.json"
+          MOVIE_FILTER: "doomsday"
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           # One pass per run; a full scan takes about 70s and the cron
           # schedule alone sets the rhythm.
           RUN_SECONDS: "0"
         run: python scene_bot.py
 
       - name: Commit state
+        if: ${{ !inputs.dry_run }}
         run: |
           git config user.name  "cinema-bot"
           git config user.email "cinema-bot@users.noreply.github.com"
