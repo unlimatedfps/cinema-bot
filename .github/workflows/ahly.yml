@@ -2,15 +2,20 @@ name: ahly-tickets
 
 on:
   schedule:
-    # GitHub's shortest schedule. Runs can start a few minutes late
-    # (sometimes more) when GitHub is busy.
-    - cron: "*/5 * * * *"
+    # GitHub only starts scheduled runs about once an hour in practice, so
+    # every run keeps checking on its own for most of an hour (loop.sh).
+    # A run that fires while another is going waits for it to finish.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Print the message instead of sending it"
+        description: "Print messages instead of sending them"
         type: boolean
         default: false
+      minutes:
+        description: "How long this run keeps checking"
+        type: string
+        default: "55"
 
 permissions:
   contents: write
@@ -22,7 +27,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -32,23 +37,11 @@ jobs:
 
       - run: pip install requests
 
-      - name: Check Tazkarti
+      - name: Watch
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-        run: python ahly_bot.py
+          STATE_FILE: "ahly_state.json"
 
-      - name: Commit state
-        if: ${{ !inputs.dry_run }}
-        run: |
-          git config user.name  "cinema-bot"
-          git config user.email "cinema-bot@users.noreply.github.com"
-          git add ahly_state.json 2>/dev/null || exit 0
-          git diff --cached --quiet && exit 0
-          git commit -m "ahly state $(date -u +%FT%TZ)"
-          for i in 1 2 3; do
-            git pull --rebase --autostash -X ours && git push && exit 0
-            sleep 5
-          done
-          exit 1
+        run: bash loop.sh ${{ inputs.minutes || '55' }} 120 ahly_state.json python ahly_bot.py

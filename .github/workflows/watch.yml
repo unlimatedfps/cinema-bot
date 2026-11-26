@@ -2,15 +2,20 @@ name: cinema-watch
 
 on:
   schedule:
-    # Only Avengers: Doomsday is followed now, so a pass is a handful of
-    # requests and can run every 5 min (GitHub may start runs late).
-    - cron: "*/5 * * * *"
+    # GitHub only starts scheduled runs about once an hour in practice, so
+    # every run keeps checking on its own for most of an hour (loop.sh).
+    # A run that fires while another is going waits for it to finish.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Print the message instead of sending it"
+        description: "Print messages instead of sending them"
         type: boolean
         default: false
+      minutes:
+        description: "How long this run keeps checking"
+        type: string
+        default: "55"
 
 permissions:
   contents: write
@@ -22,7 +27,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -30,30 +35,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install -r requirements.txt
+      - run: pip install requests
 
-      - name: Run watcher
+      - name: Watch
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           STATE_FILE: "scene_state.json"
           MOVIE_FILTER: "doomsday"
-          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-          # One pass per run; a full scan takes about 70s and the cron
-          # schedule alone sets the rhythm.
           RUN_SECONDS: "0"
-        run: python scene_bot.py
-
-      - name: Commit state
-        if: ${{ !inputs.dry_run }}
-        run: |
-          git config user.name  "cinema-bot"
-          git config user.email "cinema-bot@users.noreply.github.com"
-          git add scene_state.json || exit 0
-          git diff --cached --quiet && exit 0
-          git commit -m "state $(date -u +%FT%TZ)"
-          for i in 1 2 3; do
-            git pull --rebase --autostash -X ours && git push && exit 0
-            sleep 5
-          done
-          exit 1
+        run: bash loop.sh ${{ inputs.minutes || '55' }} 180 scene_state.json python scene_bot.py
